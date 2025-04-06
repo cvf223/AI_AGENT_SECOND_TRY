@@ -5,7 +5,7 @@ import telegram from "@elizaos-plugins/client-telegram";
 import solana from "@elizaos-plugins/plugin-solana";
 
 export const defaultCharacter: Character = {
-  name: "ChrisSuperDEV_MOD",
+  name: "ChrisSuperDEV",
   username: "cvf223",
   plugins: [telegram, solana],
   modelProvider: ModelProviderName.OPENAI,
