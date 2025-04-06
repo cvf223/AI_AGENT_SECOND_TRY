@@ -47,10 +47,14 @@ async function swapToken(
       new BigNumber(10).pow(decimals)
     );
 
-    elizaLogger.log("Fetching quote with params:", {
-      inputMint: inputTokenCA,
-      outputMint: outputTokenCA,
-      amount: adjustedAmount,
+    // Log arbitrage-specific information
+    elizaLogger.log("Arbitrage trade parameters:", {
+      inputToken: inputTokenCA,
+      outputToken: outputTokenCA,
+      amount: adjustedAmount.toString(),
+      timestamp: new Date().toISOString(),
+      network: "Solana",
+      strategy: "Cross-DEX Arbitrage"
     });
 
     const quoteResponse = await fetch(
@@ -59,11 +63,27 @@ async function swapToken(
     const quoteData = await quoteResponse.json();
 
     if (!quoteData || quoteData.error) {
-      elizaLogger.error("Quote error:", quoteData);
+      elizaLogger.error("Quote error:", {
+        error: quoteData?.error || "Unknown error",
+        inputToken: inputTokenCA,
+        outputToken: outputTokenCA,
+        amount: adjustedAmount.toString()
+      });
       throw new Error(
         `Failed to get quote: ${quoteData?.error || "Unknown error"}`
       );
     }
+
+    // Log arbitrage opportunity details
+    elizaLogger.log("Arbitrage opportunity found:", {
+      inputToken: inputTokenCA,
+      outputToken: outputTokenCA,
+      expectedOutput: quoteData.outAmount,
+      priceImpact: quoteData.priceImpactPct,
+      marketFee: quoteData.marketFee,
+      route: quoteData.routePlan,
+      timestamp: new Date().toISOString()
+    });
 
     elizaLogger.log("Quote received:", quoteData);
 
@@ -76,6 +96,14 @@ async function swapToken(
         maxLamports: 4000000,
         priorityLevel: "veryHigh",
       },
+      computeUnitPriceMicroLamports: 1000000,
+      asLegacyTransaction: false,
+      useSharedAccounts: true,
+      useTokenLedger: true,
+      wrapUnwrapSOL: true,
+      feeAccount: null,
+      destinationTokenAccount: null,
+      computeUnitLimit: 1400000,
     };
 
     elizaLogger.log("Requesting swap with body:", swapRequestBody);

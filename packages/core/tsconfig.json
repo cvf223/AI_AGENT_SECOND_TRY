@@ -3,14 +3,13 @@
         "target": "ESNext",
         "module": "ESNext",
         "lib": ["ESNext", "dom"],
-        "moduleResolution": "Bundler",
+        "moduleResolution": "node",
         "outDir": "./dist",
         "rootDir": "./src",
         "strict": false,
         "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": false,
-        "allowImportingTsExtensions": true,
         "declaration": true,
         "emitDeclarationOnly": true,
         "resolveJsonModule": true,
@@ -19,9 +18,16 @@
         "checkJs": false,
         "noEmitOnError": false,
         "moduleDetection": "force",
-        "allowArbitraryExtensions": true,
-        "customConditions": ["@elizaos/source"]
+        "allowImportingTsExtensions": true
     },
     "include": ["src/**/*"],
-    "exclude": ["node_modules", "dist", "src/**/*.d.ts", "types/**/*.test.ts"]
+    "exclude": [
+        "node_modules",
+        "dist",
+        "src/**/*.d.ts",
+        "types/**/*.test.ts",
+        "src/test_resources/**/*",
+        "src/**/*.test.ts",
+        "src/**/*.spec.ts"
+    ]
 }

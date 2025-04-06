@@ -9,18 +9,23 @@
     "exports": {
         "./package.json": "./package.json",
         ".": {
-            "import": {
-                "@elizaos/source": "./src/index.ts",
-                "types": "./dist/index.d.ts",
-                "default": "./dist/index.js"
-            }
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.js",
+            "default": "./dist/index.js"
+        },
+        "./types": {
+            "types": "./dist/types.d.ts",
+            "import": "./dist/types.js",
+            "require": "./dist/types.js",
+            "default": "./dist/types.js"
         }
     },
     "files": [
         "dist"
     ],
     "scripts": {
-        "build": "tsup --format esm --dts",
+        "build": "tsc && tsup --format esm",
         "watch": "tsc --watch",
         "dev": "tsup --format esm --dts --watch",
         "build:docs": "cd docs && pnpm run build",
@@ -74,7 +79,7 @@
         "@types/uuid": "10.0.0",
         "ai": "4.1.16",
         "anthropic-vertex-ai": "1.0.2",
-        "bignumber.js": "9.1.2",
+        "bignumber.js": "^9.1.2",
         "dotenv": "16.4.5",
         "fastembed": "1.14.1",
         "fastestsmallesttextencoderdecoder": "1.0.22",

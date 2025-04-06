@@ -2,7 +2,23 @@
     "extends": "../core/tsconfig.json",
     "compilerOptions": {
         "outDir": "dist",
-        "rootDir": "src"
+        "rootDir": "src",
+        "module": "Node16",
+        "moduleResolution": "Node16",
+        "allowImportingTsExtensions": true,
+        "declaration": true,
+        "emitDeclarationOnly": true,
+        "resolveJsonModule": true,
+        "noImplicitAny": false,
+        "allowJs": true,
+        "checkJs": true,
+        "noEmitOnError": true,
+        "moduleDetection": "force",
+        "baseUrl": ".",
+        "paths": {
+            "@elizaos/core": ["../core/src"]
+        }
     },
-    "include": ["src/**/*.ts"]
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

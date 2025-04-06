@@ -9,6 +9,8 @@ import { bridgeAction } from "./actions/bridge";
 import { swapAction } from "./actions/swap";
 import { transferAction } from "./actions/transfer";
 import { evmWalletProvider } from "./providers/wallet";
+import { IAgentRuntime } from "@elizaos/core";
+import { elizaLogger } from "@elizaos/core";
 
 export const evmPlugin: Plugin = {
     name: "evm",
@@ -17,6 +19,9 @@ export const evmPlugin: Plugin = {
     evaluators: [],
     services: [],
     actions: [transferAction, bridgeAction, swapAction],
+    initialize: async (runtime: IAgentRuntime) => {
+        elizaLogger.log("EVM plugin initialized");
+    }
 };
 
 export default evmPlugin;

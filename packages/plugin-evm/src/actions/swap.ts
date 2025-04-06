@@ -12,8 +12,8 @@ import {
   getRoutes,
   type Route,
 } from "@lifi/sdk";
-
-import { initWalletProvider, type WalletProvider } from "../providers/wallet";
+import { FlashbotProvider } from "../providers/flashbot";
+import { WalletProvider } from "../providers/wallet";
 import { swapTemplate } from "../templates";
 import type { SwapParams, SwapQuote, Transaction } from "../types";
 import {
@@ -23,17 +23,38 @@ import {
   type Hex,
   parseAbi,
   parseUnits,
+  type PublicClient,
+  type WalletClient,
+  type Chain,
+  type Account,
 } from "viem";
 import type { BebopRoute } from "../types/index";
+import { FlashLoanProvider } from "../providers/flashLoan";
 
 export { swapTemplate };
 
 export class SwapAction {
-  private lifiConfig;
-  private bebopChainsMap;
+  private runtime: IAgentRuntime;
+  private walletProvider: WalletProvider;
+  private flashbotProvider: FlashbotProvider;
+  private flashLoanProvider: FlashLoanProvider;
+  private lifiConfig: any;
+  private bebopChainsMap: Record<string, string>;
 
-  constructor(private walletProvider: WalletProvider) {
-    this.walletProvider = walletProvider;
+  constructor(runtime: IAgentRuntime) {
+    this.runtime = runtime;
+    const privateKey = runtime.getSetting("EVM_PRIVATE_KEY");
+    if (!privateKey) throw new Error("EVM_PRIVATE_KEY not set");
+    
+    this.walletProvider = new WalletProvider(
+      privateKey as `0x${string}`,
+      runtime.cacheManager
+    );
+    this.initializeLifiConfig();
+    this.initializeBebopChainsMap();
+  }
+
+  private initializeLifiConfig() {
     const lifiChains: ExtendedChain[] = [];
     for (const config of Object.values(this.walletProvider.chains)) {
       try {
@@ -66,8 +87,7 @@ export class SwapAction {
           },
           coin: config.nativeCurrency.symbol,
           mainnet: true,
-          diamondAddress:
-            "0x0000000000000000000000000000000000000000",
+          diamondAddress: "0x0000000000000000000000000000000000000000",
         } as ExtendedChain);
       } catch {
         // Skip chains with missing config in viem
@@ -77,22 +97,107 @@ export class SwapAction {
       integrator: "eliza",
       chains: lifiChains,
     });
+  }
+
+  private initializeBebopChainsMap() {
     this.bebopChainsMap = {
       mainnet: "ethereum",
     };
+  }
+
+  private async initializeFlashbotProvider() {
+    try {
+      const runtime = await this.walletProvider.getRuntime();
+      const walletClient = this.walletProvider.getWalletClient("mainnet");
+      const publicClient = this.walletProvider.getPublicClient("mainnet");
+      
+      this.flashbotProvider = new FlashbotProvider(
+        runtime,
+        walletClient as WalletClient,
+        publicClient as PublicClient
+      );
+    } catch (error) {
+      elizaLogger.error("Failed to initialize Flashbot provider:", error);
+      throw error;
+    }
+  }
+
+  private async initializeFlashLoanProvider() {
+    try {
+      const runtime = await this.walletProvider.getRuntime();
+      const walletClient = this.walletProvider.getWalletClient("mainnet");
+      const publicClient = this.walletProvider.getPublicClient("mainnet");
+      
+      // Aave V3 Pool address on Ethereum mainnet
+      const aavePoolAddress = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2" as Address;
+      
+      // Replace this with your deployed ArbitrageExecutor contract address
+      const arbitrageExecutorAddress = "YOUR_DEPLOYED_CONTRACT_ADDRESS" as Address;
+      
+      this.flashLoanProvider = new FlashLoanProvider(
+        runtime,
+        walletClient as WalletClient,
+        publicClient as PublicClient,
+        aavePoolAddress,
+        arbitrageExecutorAddress
+      );
+    } catch (error) {
+      elizaLogger.error("Failed to initialize FlashLoan provider:", error);
+      throw error;
+    }
+  }
+
+  async executeArbitrage(
+    transactions: {
+      to: Address;
+      data: Hex;
+      value: bigint;
+    }[]
+  ): Promise<string> {
+    try {
+      if (!this.flashbotProvider) {
+        await this.initializeFlashbotProvider();
+      }
+
+      const publicClient = this.walletProvider.getPublicClient("mainnet");
+      const blockNumber = await publicClient.getBlockNumber();
+      
+      // Simulate the arbitrage bundle first
+      const isProfitable = await this.flashbotProvider.simulateArbitrageBundle(transactions);
+      if (!isProfitable) {
+        throw new Error("Arbitrage simulation failed - not profitable");
+      }
+
+      // Execute the arbitrage if simulation is successful
+      return await this.flashbotProvider.sendArbitrageBundle(transactions, Number(blockNumber));
+    } catch (error) {
+      elizaLogger.error("Error in executeArbitrage:", error);
+      throw error;
+    }
   }
 
   async swap(params: SwapParams): Promise<Transaction> {
     const walletClient = this.walletProvider.getWalletClient(params.chain);
     const [fromAddress] = await walletClient.getAddresses();
 
-    // Getting quotes from different aggregators and sorting them by minAmount (amount after slippage)
+    // Getting quotes from different aggregators and sorting them by minAmount
     const sortedQuotes: SwapQuote[] = await this.getSortedQuotes(
       fromAddress,
       params
     );
 
-    // Trying to execute the best quote by amount, fallback to the next one if it fails
+    // If this is an arbitrage opportunity, try to use Flashbots with Flash Loan
+    if (this.isArbitrageOpportunity(sortedQuotes)) {
+      try {
+        await this.initializeFlashbotProvider();
+        await this.initializeFlashLoanProvider();
+        return await this.executeArbitrageWithFlashLoan(sortedQuotes, params);
+      } catch (error) {
+        elizaLogger.error("Flash loan execution failed, falling back to normal swap:", error);
+      }
+    }
+
+    // Fallback to normal swap execution
     for (const quote of sortedQuotes) {
       let res;
       switch (quote.aggregator) {
@@ -110,32 +215,171 @@ export class SwapAction {
     throw new Error("Execution failed");
   }
 
+  private isArbitrageOpportunity(quotes: SwapQuote[]): boolean {
+    if (quotes.length < 2) return false;
+    
+    // Check if there's a significant price difference between quotes
+    const firstQuote = BigInt(quotes[0].minOutputAmount);
+    const secondQuote = BigInt(quotes[1].minOutputAmount);
+    const priceDifference = Number((firstQuote - secondQuote) * 100n / firstQuote);
+    
+    // Consider it an arbitrage opportunity if price difference is > 0.5%
+    return priceDifference > 0.5;
+  }
+
+  private async executeArbitrageWithFlashLoan(
+    quotes: SwapQuote[],
+    params: SwapParams
+  ): Promise<Transaction> {
+    try {
+      if (!this.flashLoanProvider) {
+        await this.initializeFlashLoanProvider();
+      }
+
+      const transactions = await Promise.all(
+        quotes.map(async (quote) => {
+          let tx;
+          switch (quote.aggregator) {
+            case "lifi":
+              tx = await this.prepareLifiTransaction(quote);
+              break;
+            case "bebop":
+              tx = await this.prepareBebopTransaction(quote, params);
+              break;
+            default:
+              throw new Error("Unsupported aggregator");
+          }
+          return tx;
+        })
+      );
+
+      // Calculate the required flash loan amount
+      const flashLoanAmount = BigInt(quotes[0].minOutputAmount);
+      const asset = params.fromToken;
+
+      // Execute flash loan with arbitrage logic
+      const flashLoanTx = await this.flashLoanProvider.executeFlashLoan(
+        [asset],
+        [flashLoanAmount],
+        async (flashLoanParams) => {
+          // Encode the arbitrage transactions as parameters
+          const encodedParams = encodeFunctionData({
+            abi: parseAbi(["function executeArbitrage(bytes[] memory transactions)"]),
+            functionName: "executeArbitrage",
+            args: [transactions.map(tx => tx.data)],
+          });
+
+          return encodedParams;
+        }
+      );
+
+      return {
+        hash: flashLoanTx as `0x${string}`,
+        from: transactions[0].to,
+        to: transactions[transactions.length - 1].to,
+        value: 0n,
+        chainId: this.walletProvider.getChainConfigs(params.chain).id,
+      };
+    } catch (error) {
+      elizaLogger.error("Error in executeArbitrageWithFlashLoan:", error);
+      throw error;
+    }
+  }
+
+  private async prepareLifiTransaction(quote: SwapQuote): Promise<{
+    to: Address;
+    data: Hex;
+    value: bigint;
+  }> {
+    const route: Route = quote.swapData as Route;
+    const execution = await executeRoute(route, this.lifiConfig);
+    const process = execution.steps[0]?.execution?.process[0];
+
+    if (!process?.data) {
+      throw new Error("Failed to prepare Lifi transaction");
+    }
+
+    return {
+      to: route.steps[0].estimate.approvalAddress as Address,
+      data: process.data as Hex,
+      value: 0n,
+    };
+  }
+
+  private async prepareBebopTransaction(
+    quote: SwapQuote,
+    params: SwapParams
+  ): Promise<{
+    to: Address;
+    data: Hex;
+    value: bigint;
+  }> {
+    const bebopRoute: BebopRoute = quote.swapData as BebopRoute;
+    
+    // First, prepare the approval transaction if needed
+    const allowanceAbi = parseAbi([
+      "function allowance(address,address) view returns (uint256)",
+    ]);
+    const allowance: bigint = await this.walletProvider
+      .getPublicClient(params.chain)
+      .readContract({
+        address: params.fromToken,
+        abi: allowanceAbi,
+        functionName: "allowance",
+        args: [bebopRoute.from, bebopRoute.approvalTarget],
+      });
+
+    if (allowance < BigInt(bebopRoute.sellAmount)) {
+      const approvalData = encodeFunctionData({
+        abi: parseAbi(["function approve(address,uint256)"]),
+        functionName: "approve",
+        args: [bebopRoute.approvalTarget, BigInt(bebopRoute.sellAmount)],
+      });
+
+      return {
+        to: params.fromToken,
+        data: approvalData,
+        value: 0n,
+      };
+    }
+
+    // Then prepare the swap transaction
+    return {
+      to: bebopRoute.to,
+      data: bebopRoute.data as Hex,
+      value: BigInt(bebopRoute.value),
+    };
+  }
+
   private async getSortedQuotes(
     fromAddress: Address,
     params: SwapParams
   ): Promise<SwapQuote[]> {
-    const decimalsAbi = parseAbi([
-      "function decimals() view returns (uint8)",
-    ]);
-    const decimals = await this.walletProvider
-      .getPublicClient(params.chain)
-      .readContract({
-        address: params.fromToken,
-        abi: decimalsAbi,
-        functionName: "decimals",
-      });
-    const quotes: SwapQuote[] | undefined = await Promise.all([
-      this.getLifiQuote(fromAddress, params, decimals),
-      this.getBebopQuote(fromAddress, params, decimals),
-    ]);
-    const sortedQuotes: SwapQuote[] = quotes.filter(
-      (quote) => quote !== undefined
-    ) as SwapQuote[];
-    sortedQuotes.sort((a, b) =>
-      BigInt(a.minOutputAmount) > BigInt(b.minOutputAmount) ? -1 : 1
+    const fromTokenDecimals = await this.getTokenDecimals(
+      params.fromToken,
+      params.chain
     );
-    if (sortedQuotes.length === 0) throw new Error("No routes found");
-    return sortedQuotes;
+
+    const quotes: SwapQuote[] = [];
+    const lifiQuote = await this.getLifiQuote(
+      fromAddress,
+      params,
+      fromTokenDecimals
+    );
+    if (lifiQuote) quotes.push(lifiQuote);
+
+    const bebopQuote = await this.getBebopQuote(
+      fromAddress,
+      params,
+      fromTokenDecimals
+    );
+    if (bebopQuote) quotes.push(bebopQuote);
+
+    return quotes.sort((a, b) => {
+      const aAmount = BigInt(a.minOutputAmount);
+      const bAmount = BigInt(b.minOutputAmount);
+      return aAmount > bAmount ? -1 : aAmount < bAmount ? 1 : 0;
+    });
   }
 
   private async getLifiQuote(
@@ -145,8 +389,7 @@ export class SwapAction {
   ): Promise<SwapQuote | undefined> {
     try {
       const routes = await getRoutes({
-        fromChainId: this.walletProvider.getChainConfigs(params.chain)
-          .id,
+        fromChainId: this.walletProvider.getChainConfigs(params.chain).id,
         toChainId: this.walletProvider.getChainConfigs(params.chain).id,
         fromTokenAddress: params.fromToken,
         toTokenAddress: params.toToken,
@@ -154,20 +397,24 @@ export class SwapAction {
           params.amount,
           fromTokenDecimals
         ).toString(),
-        fromAddress: fromAddress,
+        fromAddress,
+        toAddress: fromAddress,
         options: {
           slippage: params.slippage / 100 || 0.005,
           order: "RECOMMENDED",
         },
       });
-      if (!routes.routes.length) throw new Error("No routes found");
+
+      if (routes.routes.length === 0) return undefined;
+
+      const bestRoute = routes.routes[0];
       return {
         aggregator: "lifi",
-        minOutputAmount: routes.routes[0].steps[0].estimate.toAmountMin,
-        swapData: routes.routes[0],
+        minOutputAmount: bestRoute.toAmountMin,
+        swapData: bestRoute,
       };
     } catch (error) {
-      elizaLogger.error("Error in getLifiQuote:", error.message);
+      elizaLogger.error("Failed to get Lifi quote:", error);
       return undefined;
     }
   }
@@ -178,52 +425,47 @@ export class SwapAction {
     fromTokenDecimals: number
   ): Promise<SwapQuote | undefined> {
     try {
-      const url = `https://api.bebop.xyz/router/${this.bebopChainsMap[params.chain] ?? params.chain}/v1/quote`;
-      const reqParams = new URLSearchParams({
-        sell_tokens: params.fromToken,
-        buy_tokens: params.toToken,
-        sell_amounts: parseUnits(
-          params.amount,
-          fromTokenDecimals
-        ).toString(),
-        taker_address: fromAddress,
-        approval_type: "Standard",
-        skip_validation: "true",
-        gasless: "false",
-        source: "eliza",
-      });
-      const response = await fetch(`${url}?${reqParams.toString()}`, {
-        method: "GET",
-        headers: { accept: "application/json" },
-      });
-      if (!response.ok) {
-        throw Error(response.statusText);
-      }
+      const chainName = this.bebopChainsMap[params.chain];
+      if (!chainName) return undefined;
+
+      const response = await fetch(
+        `https://api.bebop.xyz/${chainName}/v1/quote`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sellTokens: [
+              {
+                token: params.fromToken,
+                amount: parseUnits(
+                  params.amount,
+                  fromTokenDecimals
+                ).toString(),
+              },
+            ],
+            buyTokens: [
+              {
+                token: params.toToken,
+                proportion: 1,
+              },
+            ],
+            takerAddress: fromAddress,
+          }),
+        }
+      );
+
+      if (!response.ok) return undefined;
+
       const data = await response.json();
-      const route: BebopRoute = {
-        data: data.routes[0].quote.tx.data,
-        sellAmount: parseUnits(
-          params.amount,
-          fromTokenDecimals
-        ).toString(),
-        approvalTarget: data.routes[0].quote
-          .approvalTarget as `0x${string}`,
-        from: data.routes[0].quote.tx.from as `0x${string}`,
-        value: data.routes[0].quote.tx.value.toString(),
-        to: data.routes[0].quote.tx.to as `0x${string}`,
-        gas: data.routes[0].quote.tx.gas.toString(),
-        gasPrice: data.routes[0].quote.tx.gasPrice.toString(),
-      };
       return {
         aggregator: "bebop",
-        minOutputAmount:
-          data.routes[0].quote.buyTokens[
-            params.toToken
-          ].minimumAmount.toString(),
-        swapData: route,
+        minOutputAmount: data.quote.buyAmount,
+        swapData: data.quote,
       };
     } catch (error) {
-      elizaLogger.error("Error in getBebopQuote:", error.message);
+      elizaLogger.error("Failed to get Bebop quote:", error);
       return undefined;
     }
   }
@@ -233,25 +475,22 @@ export class SwapAction {
   ): Promise<Transaction | undefined> {
     try {
       const route: Route = quote.swapData as Route;
-      const execution = await executeRoute(
-        quote.swapData as Route,
-        this.lifiConfig
-      );
+      const execution = await executeRoute(route, this.lifiConfig);
       const process = execution.steps[0]?.execution?.process[0];
 
-      if (!process?.status || process.status === "FAILED") {
-        throw new Error("Transaction failed");
+      if (!process?.data) {
+        throw new Error("Failed to execute Lifi quote");
       }
+
       return {
         hash: process.txHash as `0x${string}`,
-        from: route.fromAddress! as `0x${string}`,
-        to: route.steps[0].estimate.approvalAddress as `0x${string}`,
+        from: route.steps[0].estimate.approvalAddress as Address,
+        to: route.steps[0].estimate.approvalAddress as Address,
         value: 0n,
-        data: process.data as `0x${string}`,
         chainId: route.fromChainId,
       };
     } catch (error) {
-      elizaLogger.error(`Failed to execute lifi quote: ${error}`);
+      elizaLogger.error("Failed to execute Lifi quote:", error);
       return undefined;
     }
   }
@@ -262,6 +501,8 @@ export class SwapAction {
   ): Promise<Transaction | undefined> {
     try {
       const bebopRoute: BebopRoute = quote.swapData as BebopRoute;
+      
+      // First, check and execute approval if needed
       const allowanceAbi = parseAbi([
         "function allowance(address,address) view returns (uint256)",
       ]);
@@ -273,75 +514,80 @@ export class SwapAction {
           functionName: "allowance",
           args: [bebopRoute.from, bebopRoute.approvalTarget],
         });
+
       if (allowance < BigInt(bebopRoute.sellAmount)) {
         const approvalData = encodeFunctionData({
           abi: parseAbi(["function approve(address,uint256)"]),
           functionName: "approve",
-          args: [
-            bebopRoute.approvalTarget,
-            BigInt(bebopRoute.sellAmount),
-          ],
+          args: [bebopRoute.approvalTarget, BigInt(bebopRoute.sellAmount)],
         });
-        await this.walletProvider
-          .getWalletClient(params.chain)
-          .sendTransaction({
-            account: this.walletProvider.getWalletClient(
-              params.chain
-            ).account,
-            to: params.fromToken,
-            value: 0n,
-            data: approvalData,
-            kzg: {
-              blobToKzgCommitment: (
-                _: ByteArray
-              ): ByteArray => {
-                throw new Error("Function not implemented.");
-              },
-              computeBlobKzgProof: (
-                _blob: ByteArray,
-                _commitment: ByteArray
-              ): ByteArray => {
-                throw new Error("Function not implemented.");
-              },
-            },
-            chain: undefined,
-          });
-      }
-      const hash = await this.walletProvider
-        .getWalletClient(params.chain)
-        .sendTransaction({
-          account: this.walletProvider.getWalletClient(params.chain)
-            .account,
-          to: bebopRoute.to,
-          value: BigInt(bebopRoute.value),
-          data: bebopRoute.data as Hex,
+
+        const walletClient = this.walletProvider.getWalletClient(params.chain);
+        const approvalTx = await walletClient.sendTransaction({
+          account: walletClient.account,
+          chain: undefined,
+          to: params.fromToken,
+          data: approvalData,
+          value: 0n,
           kzg: {
-            blobToKzgCommitment: (
-              _: ByteArray
-            ): ByteArray => {
+            blobToKzgCommitment: (_: ByteArray): ByteArray => {
               throw new Error("Function not implemented.");
             },
-            computeBlobKzgProof: (
-              _blob: ByteArray,
-              _commitment: ByteArray
-            ): ByteArray => {
+            computeBlobKzgProof: (_blob: ByteArray, _commitment: ByteArray): ByteArray => {
               throw new Error("Function not implemented.");
             },
           },
-          chain: undefined,
         });
-      return {
-        hash,
-        from: this.walletProvider.getWalletClient(params.chain).account
-          .address,
+
+        // Wait for approval transaction to be mined
+        await this.walletProvider
+          .getPublicClient(params.chain)
+          .waitForTransactionReceipt({ hash: approvalTx });
+      }
+
+      // Then execute the swap
+      const walletClient = this.walletProvider.getWalletClient(params.chain);
+      const swapTx = await walletClient.sendTransaction({
+        account: walletClient.account,
+        chain: undefined,
         to: bebopRoute.to,
-        value: BigInt(bebopRoute.value),
         data: bebopRoute.data as Hex,
+        value: BigInt(bebopRoute.value),
+        kzg: {
+          blobToKzgCommitment: (_: ByteArray): ByteArray => {
+            throw new Error("Function not implemented.");
+          },
+          computeBlobKzgProof: (_blob: ByteArray, _commitment: ByteArray): ByteArray => {
+            throw new Error("Function not implemented.");
+          },
+        },
+      });
+
+      return {
+        hash: swapTx,
+        from: bebopRoute.from as Address,
+        to: bebopRoute.to as Address,
+        value: BigInt(bebopRoute.value),
+        chainId: this.walletProvider.getChainConfigs(params.chain).id,
       };
     } catch (error) {
-      elizaLogger.error(`Failed to execute bebop quote: ${error}`);
+      elizaLogger.error("Failed to execute Bebop quote:", error);
       return undefined;
     }
+  }
+
+  private async getTokenDecimals(
+    token: Address,
+    chain: string
+  ): Promise<number> {
+    const decimalsAbi = parseAbi(["function decimals() view returns (uint8)"]);
+    return await this.walletProvider
+      .getPublicClient(chain as "mainnet")
+      .readContract({
+        address: token,
+        abi: decimalsAbi,
+        functionName: "decimals",
+      });
   }
 }
 
@@ -350,14 +596,13 @@ export const swapAction = {
   description: "Swap tokens on the same chain",
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state: State,
     _options: any,
     callback?: any
   ) => {
     elizaLogger.log("Swap action handler called");
-    const walletProvider = await initWalletProvider(runtime);
-    const action = new SwapAction(walletProvider);
+    const action = new SwapAction(runtime);
 
     // Compose swap context
     const swapContext = composeContext({

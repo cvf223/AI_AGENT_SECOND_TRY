@@ -40,6 +40,7 @@ export class WalletProvider {
     private CACHE_EXPIRY_SEC = 5;
     chains: Record<string, Chain> = { ...viemChains };
     account: PrivateKeyAccount;
+    private runtime: IAgentRuntime | null = null;
 
     constructor(
         accountOrPrivateKey: PrivateKeyAccount | `0x${string}`,
@@ -54,6 +55,17 @@ export class WalletProvider {
         }
 
         this.cache = new NodeCache({ stdTTL: this.CACHE_EXPIRY_SEC });
+    }
+
+    async getRuntime(): Promise<IAgentRuntime> {
+        if (!this.runtime) {
+            const runtime = await this.cacheManager.get<IAgentRuntime>("runtime");
+            if (!runtime) {
+                throw new Error("Runtime not found in cache");
+            }
+            this.runtime = runtime;
+        }
+        return this.runtime;
     }
 
     getAddress(): Address {

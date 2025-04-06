@@ -11,6 +11,8 @@ import { goalEvaluator } from "./evaluators/goal.ts";
 import { boredomProvider } from "./providers/boredom.ts";
 import { factsProvider } from "./providers/facts.ts";
 import { timeProvider } from "./providers/time.ts";
+import { IAgentRuntime } from "@elizaos/core";
+import { elizaLogger } from "@elizaos/core";
 
 export * as actions from "./actions";
 export * as evaluators from "./evaluators";
@@ -18,17 +20,19 @@ export * as providers from "./providers";
 
 export const bootstrapPlugin: Plugin = {
     name: "bootstrap",
-    description: "Agent bootstrap with basic actions and evaluators",
+    description: "Bootstrap plugin for Eliza",
     actions: [
         continueAction,
         followRoomAction,
         unfollowRoomAction,
         ignoreAction,
-        noneAction,
         muteRoomAction,
         unmuteRoomAction,
     ],
     evaluators: [factEvaluator, goalEvaluator],
     providers: [boredomProvider, timeProvider, factsProvider],
+    initialize: async (runtime: IAgentRuntime) => {
+        elizaLogger.log("Bootstrap plugin initialized");
+    }
 };
 export default bootstrapPlugin;

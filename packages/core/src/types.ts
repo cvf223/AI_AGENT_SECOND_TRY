@@ -614,18 +614,18 @@ export type Media = {
 /**
  * Client instance
  */
-export type ClientInstance = {
+export interface ClientInstance {
     /** Client name */
-    // name: string;
+    name: string;
 
     /** Stop client connection */
     stop: (runtime: IAgentRuntime) => Promise<unknown>;
-};
+}
 
 /**
  * Client interface for platform connections
  */
-export type Client = {
+export interface Client {
     /** Client name */
     name: string;
 
@@ -634,7 +634,7 @@ export type Client = {
 
     /** Start client connection */
     start: (runtime: IAgentRuntime) => Promise<ClientInstance>;
-};
+}
 
 export type Adapter = {
     /** Initialize adapter */
@@ -644,7 +644,7 @@ export type Adapter = {
 /**
  * Plugin for extending agent functionality
  */
-export type Plugin = {
+export interface Plugin {
     /** Plugin name */
     name: string;
 
@@ -671,7 +671,9 @@ export type Plugin = {
 
     /** Optional adapters */
     adapters?: Adapter[];
-};
+
+    initialize(runtime: IAgentRuntime): Promise<void>;
+}
 
 export interface IAgentConfig {
     [key: string]: string;
@@ -716,7 +718,7 @@ export type TemplateType = string | ((options: { state: State }) => string);
 /**
  * Configuration for an agent character
  */
-export type Character = {
+export interface Character {
     /** Optional unique identifier */
     id?: UUID;
 
@@ -950,7 +952,7 @@ export type Character = {
     extends?: string[];
 
     twitterSpaces?: TwitterSpaceDecisionOptions;
-};
+}
 
 export interface TwitterSpaceDecisionOptions {
     maxSpeakers?: number;

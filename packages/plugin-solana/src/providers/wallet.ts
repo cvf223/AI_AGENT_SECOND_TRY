@@ -6,9 +6,9 @@ import {
     elizaLogger,
 } from "@elizaos/core";
 import { Connection, PublicKey } from "@solana/web3.js";
-import BigNumber from "bignumber.js";
+import { BigNumber } from "bignumber.js";
 import NodeCache from "node-cache";
-import { getWalletKey } from "../keypairUtils";
+import { getWalletKey } from "../keypairUtils.js";
 
 // Provider configuration
 const PROVIDER_CONFIG = {
@@ -419,6 +419,20 @@ export class WalletProvider {
             elizaLogger.error("Error fetching token accounts:", error);
             return [];
         }
+    }
+
+    private formatNumber(value: string | number): string {
+        return new BigNumber(value).toFormat(2);
+    }
+
+    private calculateValue(amount: string, price: string): string {
+        return new BigNumber(amount).multipliedBy(new BigNumber(price)).toString();
+    }
+
+    private calculateTotal(items: Array<Item>): string {
+        return items.reduce((total, item) => {
+            return new BigNumber(total).plus(new BigNumber(item.valueUsd)).toString();
+        }, "0");
     }
 }
 

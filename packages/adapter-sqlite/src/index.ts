@@ -1120,9 +1120,12 @@ const sqliteDatabaseAdapter: Adapter = {
     },
 };
 
-const sqlitePlugin: Plugin = {
+export const sqlitePlugin: Plugin = {
     name: "sqlite",
-    description: "SQLite database adapter plugin",
+    description: "SQLite adapter plugin",
     adapters: [sqliteDatabaseAdapter],
+    initialize: async (runtime: IAgentRuntime) => {
+        elizaLogger.log("SQLite adapter plugin initialized");
+    }
 };
 export default sqlitePlugin;

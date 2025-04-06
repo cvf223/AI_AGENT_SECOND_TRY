@@ -1,4 +1,4 @@
-import pino, { type LogFn } from "pino";
+import { pino, type LogFn } from "pino";
 import pretty from "pino-pretty";
 
 import { parseBooleanFromText } from "./parsing.ts";

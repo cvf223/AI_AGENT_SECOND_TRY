@@ -51,7 +51,7 @@ import {
 } from "./types.ts";
 import { fal } from "@fal-ai/client";
 
-import BigNumber from "bignumber.js";
+import { default as BigNumber } from "bignumber.js";
 import { createPublicClient, http } from "viem";
 import fs from "fs";
 import os from "os";
@@ -211,7 +211,7 @@ async function getOnChainEternalAISystemPrompt(
                 address: validAddress,
                 abi: contractABI,
                 functionName: "getAgentSystemPrompt",
-                args: [new BigNumber(agentId)],
+                args: [(BigNumber as any)(agentId)],
             });
             if (result) {
                 elizaLogger.info("on-chain system-prompt response", result[0]);

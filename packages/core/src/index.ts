@@ -24,3 +24,15 @@ export * from "./cache.ts";
 export { default as knowledge } from "./knowledge.ts";
 export * from "./ragknowledge.ts";
 export * from "./utils.ts";
+
+// Re-export types explicitly
+export type {
+    State,
+    Content,
+    Media,
+    Memory,
+    Plugin,
+    ClientInstance,
+    IAgentRuntime,
+    HandlerCallback,
+} from "./types.ts";

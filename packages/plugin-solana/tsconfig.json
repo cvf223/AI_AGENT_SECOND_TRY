@@ -2,7 +2,14 @@
     "extends": "../core/tsconfig.json",
     "compilerOptions": {
         "outDir": "dist",
-        "rootDir": "src"
+        "rootDir": "src",
+        "module": "Node16",
+        "moduleResolution": "node16",
+        "baseUrl": ".",
+        "paths": {
+            "@elizaos/core": ["../core/src"]
+        }
     },
-    "include": ["src/**/*.ts"]
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules", "dist"]
 }
